@@ -163,18 +163,26 @@ The built desktop executable supports command-line mode for silent subprocess in
 Usage:
 
 ```bash
-M-Cube.exe --cli --workflow draft --input @draft_request.json \
+M-Cube.exe --cli --workflow draft \
+  {--input <JSON_FILE> | --disclosure-file <FILE_PATH>} \
   --provider <PROVIDER_NAME> \
   --model <TEXT_MODEL> \
   --vision-model <VISION_MODEL> \
   --api-key <YOUR_API_KEY> \
-  --output draft_result.json
+  [--output <OUTPUT_FILE>]
 ```
 
 Examples:
+1. Method 1: Input via JSON config file
 
 ```bash
 M-Cube.exe --cli --workflow draft --input @draft_request.json --provider qwen --model qwen-plus --vision-model qwen-vl-plus --api-key <API_KEY> --temperature 0.1 --timeout-sec 600 --pretty --output draft_result.json
+```
+
+2. Method 2: Direct local file input
+
+```bash
+M-Cube.exe --cli --workflow draft --disclosure-file ./docs/disclosure.pdf --provider qwen --model qwen-plus --vision-model qwen-vl-plus --api-key <API_KEY> --temperature 0.1 --timeout-sec 600 --pretty --output draft_result.json
 ```
 
 Output contract:

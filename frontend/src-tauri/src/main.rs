@@ -24,6 +24,10 @@ struct SidecarRuntime {
 struct CliOptions {
     workflow: Option<String>,
     input: Option<String>,
+    disclosure_file: Option<String>,
+    oa_notice_file: Option<String>,
+    application_file: Option<String>,
+    prior_art_files: Vec<String>,
     timeout_sec: u64,
     pretty: bool,
     output: Option<String>,
@@ -284,6 +288,10 @@ fn shutdown_sidecar(child: &mut Child, log_file: &Path) {
 fn parse_cli_args(args: &[String]) -> Result<CliOptions, String> {
     let mut workflow: Option<String> = None;
     let mut input: Option<String> = None;
+    let mut disclosure_file: Option<String> = None;
+    let mut oa_notice_file: Option<String> = None;
+    let mut application_file: Option<String> = None;
+    let mut prior_art_files: Vec<String> = Vec::new();
     let mut timeout_sec: u64 = 120;
     let mut pretty = false;
     let mut output: Option<String> = None;
@@ -312,6 +320,26 @@ fn parse_cli_args(args: &[String]) -> Result<CliOptions, String> {
                 i += 1;
                 let value = args.get(i).ok_or_else(|| String::from("Missing value for --input"))?;
                 input = Some(value.to_string());
+            }
+            "--disclosure-file" => {
+                i += 1;
+                let value = args.get(i).ok_or_else(|| String::from("Missing value for --disclosure-file"))?;
+                disclosure_file = Some(value.to_string());
+            }
+            "--oa-notice-file" => {
+                i += 1;
+                let value = args.get(i).ok_or_else(|| String::from("Missing value for --oa-notice-file"))?;
+                oa_notice_file = Some(value.to_string());
+            }
+            "--application-file" => {
+                i += 1;
+                let value = args.get(i).ok_or_else(|| String::from("Missing value for --application-file"))?;
+                application_file = Some(value.to_string());
+            }
+            "--prior-art-file" => {
+                i += 1;
+                let value = args.get(i).ok_or_else(|| String::from("Missing value for --prior-art-file"))?;
+                prior_art_files.push(value.to_string());
             }
             "--timeout-sec" => {
                 i += 1;
@@ -364,6 +392,10 @@ fn parse_cli_args(args: &[String]) -> Result<CliOptions, String> {
     Ok(CliOptions {
         workflow,
         input,
+        disclosure_file,
+        oa_notice_file,
+        application_file,
+        prior_art_files,
         timeout_sec,
         pretty,
         output,
@@ -379,7 +411,7 @@ fn parse_cli_args(args: &[String]) -> Result<CliOptions, String> {
 }
 
 fn cli_help_text() -> &'static str {
-    "M-Cube CLI\n\nUsage:\n  M-Cube.exe --cli --workflow <draft|oa|compare|polish> --input <json|@file> [--timeout-sec N] [--pretty] [--output <path>] --provider <name> --model <name> --api-key <key> [--vision-model <name>] [--base-url <url>] [--temperature <num>]\n  M-Cube.exe --cli --help\n  M-Cube.exe --cli --version\n"
+    "M-Cube CLI\n\nUsage:\n  M-Cube.exe --cli --workflow <draft|oa|compare|polish> [--input <json|@file>] [--timeout-sec N] [--pretty] [--output <path>] --provider <name> --model <name> --api-key <key> [--vision-model <name>] [--base-url <url>] [--temperature <num>]\n\nFile mode (reuses backend parser via /files/upload):\n  draft:   --disclosure-file <path>\n  oa:      --oa-notice-file <path> --application-file <path> --prior-art-file <path> [--prior-art-file <path> ...]\n  compare: --application-file <path> --prior-art-file <path> [--prior-art-file <path> ...]\n  polish:  --application-file <path>\n\n  M-Cube.exe --cli --help\n  M-Cube.exe --cli --version\n"
 }
 
 fn normalize_provider_name(value: &str) -> String {
@@ -418,6 +450,210 @@ fn read_input_json(input_arg: &str) -> Result<Value, String> {
     } else {
         serde_json::from_str::<Value>(input_arg).map_err(|e| format!("Invalid input JSON: {e}"))
     }
+}
+
+fn detect_content_type(path: &Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_lowercase();
+    match ext.as_str() {
+        "pdf" => "application/pdf",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "doc" => "application/msword",
+        "txt" => "text/plain; charset=utf-8",
+        "json" => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
+fn upload_file_for_cli(base_url: &str, file_path: &str, purpose: &str, timeout_sec: u64) -> Result<String, String> {
+    let resolved = PathBuf::from(file_path)
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve file path ({file_path}): {e}"))?;
+    if !resolved.is_file() {
+        return Err(format!("Input path is not a file: {}", resolved.display()));
+    }
+
+    let filename = resolved
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| format!("Invalid filename: {}", resolved.display()))?;
+    let payload = fs::read(&resolved).map_err(|e| format!("Failed to read file {}: {e}", resolved.display()))?;
+    let content_type = detect_content_type(&resolved);
+    let boundary = format!(
+        "mcube-boundary-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+
+    let mut body: Vec<u8> = Vec::with_capacity(payload.len() + 1024);
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(b"Content-Disposition: form-data; name=\"purpose\"\r\n\r\n");
+    body.extend_from_slice(purpose.as_bytes());
+    body.extend_from_slice(b"\r\n");
+
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!(
+            "Content-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\n",
+            filename.replace('"', "_")
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(format!("Content-Type: {content_type}\r\n\r\n").as_bytes());
+    body.extend_from_slice(&payload);
+    body.extend_from_slice(b"\r\n");
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let timeout = Duration::from_secs(timeout_sec.max(1));
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(timeout)
+        .timeout_read(timeout)
+        .build();
+    let url = format!("{base_url}/api/v1/files/upload");
+    let req = agent.post(&url).set(
+        "Content-Type",
+        &format!("multipart/form-data; boundary={boundary}"),
+    );
+    match req.send_bytes(&body) {
+        Ok(resp) => {
+            let text = resp
+                .into_string()
+                .map_err(|e| format!("Failed to read upload response body: {e}"))?;
+            let v: Value =
+                serde_json::from_str(&text).map_err(|e| format!("Failed to parse upload response JSON: {e}"))?;
+            let file_id = v
+                .get("data")
+                .and_then(|d| d.get("file_id"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("Upload response missing data.file_id: {text}"))?;
+            Ok(file_id.to_string())
+        }
+        Err(ureq::Error::Status(status, resp)) => {
+            let body_text = resp.into_string().unwrap_or_default();
+            Err(format!(
+                "File upload failed (status={status}, purpose={purpose}, path={}): {body_text}",
+                resolved.display()
+            ))
+        }
+        Err(e) => Err(format!(
+            "File upload request failed (purpose={purpose}, path={}): {e}",
+            resolved.display()
+        )),
+    }
+}
+
+fn build_cli_request_payload(opts: &CliOptions, base_payload: Value, base_url: &str) -> Result<Value, String> {
+    let workflow = opts
+        .workflow
+        .as_deref()
+        .ok_or_else(|| String::from("Missing required argument: --workflow"))?;
+    let has_file_mode = opts.disclosure_file.is_some()
+        || opts.oa_notice_file.is_some()
+        || opts.application_file.is_some()
+        || !opts.prior_art_files.is_empty();
+    if !has_file_mode {
+        return Ok(base_payload);
+    }
+
+    let mut payload = if base_payload.is_object() {
+        base_payload
+    } else {
+        json!({})
+    };
+
+    let idempotency_key = payload
+        .get("idempotency_key")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            format!(
+                "cli-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0)
+            )
+        });
+    payload["idempotency_key"] = Value::String(idempotency_key);
+
+    match workflow {
+        "draft" => {
+            let path = opts
+                .disclosure_file
+                .as_deref()
+                .ok_or_else(|| String::from("File mode for draft requires --disclosure-file <path>"))?;
+            let file_id = upload_file_for_cli(base_url, path, "draft_disclosure", opts.timeout_sec)?;
+            payload["disclosure_file_id"] = Value::String(file_id);
+            if payload.get("disclosure_text").is_none() {
+                payload["disclosure_text"] = Value::Null;
+            }
+        }
+        "oa" => {
+            let notice = opts
+                .oa_notice_file
+                .as_deref()
+                .ok_or_else(|| String::from("File mode for oa requires --oa-notice-file <path>"))?;
+            let app = opts
+                .application_file
+                .as_deref()
+                .ok_or_else(|| String::from("File mode for oa requires --application-file <path>"))?;
+            if opts.prior_art_files.is_empty() {
+                return Err(String::from(
+                    "File mode for oa requires at least one --prior-art-file <path>",
+                ));
+            }
+            let oa_notice_file_id = upload_file_for_cli(base_url, notice, "oa_notice", opts.timeout_sec)?;
+            let application_file_id = upload_file_for_cli(base_url, app, "application", opts.timeout_sec)?;
+            let mut prior_ids: Vec<Value> = Vec::new();
+            for p in &opts.prior_art_files {
+                let file_id = upload_file_for_cli(base_url, p, "prior_art", opts.timeout_sec)?;
+                prior_ids.push(Value::String(file_id));
+            }
+            payload["oa_notice_file_id"] = Value::String(oa_notice_file_id);
+            payload["application_file_id"] = Value::String(application_file_id);
+            payload["prior_art_file_ids"] = Value::Array(prior_ids);
+            if payload.get("oa_text").is_none() {
+                payload["oa_text"] = Value::Null;
+            }
+        }
+        "compare" => {
+            let app = opts
+                .application_file
+                .as_deref()
+                .ok_or_else(|| String::from("File mode for compare requires --application-file <path>"))?;
+            if opts.prior_art_files.is_empty() {
+                return Err(String::from(
+                    "File mode for compare requires at least one --prior-art-file <path>",
+                ));
+            }
+            let application_file_id = upload_file_for_cli(base_url, app, "application", opts.timeout_sec)?;
+            let mut prior_ids: Vec<Value> = Vec::new();
+            for p in &opts.prior_art_files {
+                let file_id = upload_file_for_cli(base_url, p, "prior_art", opts.timeout_sec)?;
+                prior_ids.push(Value::String(file_id));
+            }
+            payload["application_file_id"] = Value::String(application_file_id);
+            payload["prior_art_file_ids"] = Value::Array(prior_ids);
+        }
+        "polish" => {
+            let app = opts
+                .application_file
+                .as_deref()
+                .ok_or_else(|| String::from("File mode for polish requires --application-file <path>"))?;
+            let application_file_id = upload_file_for_cli(base_url, app, "application", opts.timeout_sec)?;
+            payload["application_file_id"] = Value::String(application_file_id);
+        }
+        _ => return Err(format!("Unsupported workflow: {workflow}")),
+    }
+
+    Ok(payload)
 }
 
 fn wait_for_api_ready(base_url: &str, timeout_sec: u64) -> Result<(), String> {
@@ -527,12 +763,6 @@ fn execute_cli_task(opts: &CliOptions) -> Result<Value, String> {
         .workflow
         .as_deref()
         .ok_or_else(|| String::from("Missing required argument: --workflow"))?;
-    let input_arg = opts
-        .input
-        .as_deref()
-        .ok_or_else(|| String::from("Missing required argument: --input"))?;
-    let input_json = read_input_json(input_arg)?;
-
     let runtime_root = resolve_runtime_root_for_cli();
     let log_dir = runtime_root.join("logs");
     fs::create_dir_all(&log_dir).map_err(|e| format!("Failed to create CLI log directory: {e}"))?;
@@ -553,6 +783,12 @@ fn execute_cli_task(opts: &CliOptions) -> Result<Value, String> {
         std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
         std::env::set_var("no_proxy", "127.0.0.1,localhost");
         wait_for_api_ready(base_url, opts.timeout_sec)?;
+        let base_payload = if let Some(input_arg) = opts.input.as_deref() {
+            read_input_json(input_arg)?
+        } else {
+            json!({})
+        };
+        let input_json = build_cli_request_payload(opts, base_payload, base_url)?;
         let response = match workflow {
             "draft" => {
                 let start_resp = post_json(base_url, "/api/v1/draft/start", &input_json, opts.timeout_sec, &llm)?;
