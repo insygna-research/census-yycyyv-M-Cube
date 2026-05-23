@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import sys
 from pathlib import Path
 
@@ -11,7 +11,7 @@ def _repo_root() -> Path:
 
 
 def _host_target_triple() -> str:
-    out = subprocess.check_output(["rustc", "-vV"], text=True)
+    out = subprocess.check_output(["rustc", "-vV"], text=True)  # nosec B603 B607
     for line in out.splitlines():
         if line.startswith("host:"):
             return line.split(":", 1)[1].strip()
@@ -56,7 +56,7 @@ def main() -> None:
         str(entry),
     ]
     print("Running:", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True)  # nosec B603
 
     built_dir = dist_dir / pyinstaller_name
     built_exe = built_dir / (f"{sidecar_base}.exe" if is_windows else sidecar_base)

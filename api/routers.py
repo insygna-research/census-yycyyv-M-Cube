@@ -692,7 +692,7 @@ _POLISH_STUBS = {'diagnostic_analyzer': {'overview': '占位说明文本用于�
                                                        'mechanism_explanation': '占位说明文本用于测试流程稳定运行并满足字段最小长度要求。',
                                                        'technical_effect': '占位说明文本用于测试流程稳定运行并满足字段最小长度要求。'}],
                              'optimized_specification_text': '占位说明文本用于测试流程稳定运行并满足字段最小长度要求。'},
- 'adversarial_reviewer': {'pass_gate': True,
+ 'adversarial_reviewer': {'pass_gate': True,  # nosec B105
                           'issues': [],
                           'return_instruction': '占位说明文本用于测试流程稳定运行并满足字段最小长度要求。',
                           'final_judgement': '占位说明文本用于测试流程稳定运行并满足字段最小长度要求。'}}

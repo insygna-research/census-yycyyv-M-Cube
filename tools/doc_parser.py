@@ -2,7 +2,7 @@
 
 import os
 import hashlib
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 from io import BytesIO
 from pathlib import Path
@@ -169,7 +169,7 @@ class DocumentParser:
                     ext = str(image_dict.get("ext", "png")).lower()
                     if not isinstance(raw, (bytes, bytearray)) or len(raw) == 0:
                         continue
-                    digest = hashlib.sha1(bytes(raw)).hexdigest()
+                    digest = hashlib.sha1(bytes(raw), usedforsecurity=False).hexdigest()
                     if digest in seen_hashes:
                         continue
                     mime_type = self._ext_to_mime(ext)
@@ -213,7 +213,7 @@ class DocumentParser:
                     raw = archive.read(name)
                     if not raw:
                         continue
-                    digest = hashlib.sha1(raw).hexdigest()
+                    digest = hashlib.sha1(raw, usedforsecurity=False).hexdigest()
                     if digest in seen_hashes:
                         continue
                     ext = Path(name).suffix.lower().lstrip(".") or "png"
@@ -494,17 +494,17 @@ class DocumentParser:
                         if doc is not None:
                             try:
                                 doc.Close(False)
-                            except Exception:  # noqa: BLE001
+                            except Exception:  # noqa: BLE001 # nosec B110
                                 pass
                         if word is not None:
                             try:
                                 word.Quit()
-                            except Exception:  # noqa: BLE001
+                            except Exception:  # noqa: BLE001 # nosec B110
                                 pass
                         if com_initialized:
                             try:
                                 pythoncom.CoUninitialize()
-                            except Exception:  # noqa: BLE001
+                            except Exception:  # noqa: BLE001 # nosec B110
                                 pass
 
         # Fallback: try LibreOffice headless conversion if installed.
@@ -520,7 +520,7 @@ class DocumentParser:
                 str(path),
             ]
             try:
-                subprocess.run(command, check=True, capture_output=True, text=True)
+                subprocess.run(command, check=True, capture_output=True, text=True)  # nosec B603 B607
             except FileNotFoundError as exc:
                 if com_error_message:
                     raise ValueError(
@@ -576,17 +576,17 @@ class DocumentParser:
                         if doc is not None:
                             try:
                                 doc.Close(False)
-                            except Exception:  # noqa: BLE001
+                            except Exception:  # noqa: BLE001 # nosec B110
                                 pass
                         if word is not None:
                             try:
                                 word.Quit()
-                            except Exception:  # noqa: BLE001
+                            except Exception:  # noqa: BLE001 # nosec B110
                                 pass
                         if com_initialized:
                             try:
                                 pythoncom.CoUninitialize()
-                            except Exception:  # noqa: BLE001
+                            except Exception:  # noqa: BLE001 # nosec B110
                                 pass
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -601,7 +601,7 @@ class DocumentParser:
                 str(path),
             ]
             try:
-                subprocess.run(command, check=True, capture_output=True, text=True)
+                subprocess.run(command, check=True, capture_output=True, text=True)  # nosec B603 B607
             except FileNotFoundError as exc:
                 if com_error_message:
                     raise ValueError(
