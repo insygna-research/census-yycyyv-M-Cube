@@ -452,6 +452,150 @@ fn read_input_json(input_arg: &str) -> Result<Value, String> {
     }
 }
 
+fn value_at_path<'a>(root: &'a Value, key: &str) -> Option<&'a Value> {
+    root.get(key)
+}
+
+fn ensure_nonempty_string_field(root: &Value, key: &str, required: bool) -> Result<(), String> {
+    match value_at_path(root, key) {
+        Some(Value::String(s)) if !s.trim().is_empty() => Ok(()),
+        Some(Value::Null) if !required => Ok(()),
+        None if !required => Ok(()),
+        Some(_) => Err(format!("Field '{key}' must be a non-empty string")),
+        None => Err(format!("Missing required field '{key}'")),
+    }
+}
+
+fn ensure_array_of_nonempty_strings_field(root: &Value, key: &str, required_min: usize) -> Result<(), String> {
+    let value = value_at_path(root, key).ok_or_else(|| format!("Missing required field '{key}'"))?;
+    let arr = value
+        .as_array()
+        .ok_or_else(|| format!("Field '{key}' must be an array of non-empty strings"))?;
+    if arr.len() < required_min {
+        return Err(format!(
+            "Field '{key}' must contain at least {required_min} item(s)"
+        ));
+    }
+    for (idx, item) in arr.iter().enumerate() {
+        match item.as_str() {
+            Some(s) if !s.trim().is_empty() => {}
+            _ => return Err(format!("Field '{key}[{idx}]' must be a non-empty string")),
+        }
+    }
+    Ok(())
+}
+
+fn ensure_object_field(root: &Value, key: &str, required: bool) -> Result<(), String> {
+    match value_at_path(root, key) {
+        Some(Value::Object(_)) => Ok(()),
+        Some(Value::Null) if !required => Ok(()),
+        None if !required => Ok(()),
+        Some(_) => Err(format!("Field '{key}' must be a JSON object")),
+        None => Err(format!("Missing required field '{key}'")),
+    }
+}
+
+fn validate_cli_input_schema(workflow: &str, payload: &Value) -> Result<(), String> {
+    if !payload.is_object() {
+        return Err(String::from("Request payload must be a JSON object"));
+    }
+
+    match workflow {
+        "draft" => {
+            ensure_nonempty_string_field(payload, "idempotency_key", true)?;
+            let disclosure_text_ok = value_at_path(payload, "disclosure_text")
+                .and_then(Value::as_str)
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            let disclosure_file_ok = value_at_path(payload, "disclosure_file_id")
+                .and_then(Value::as_str)
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            if !disclosure_text_ok && !disclosure_file_ok {
+                return Err(String::from(
+                    "Draft input requires either 'disclosure_text' or 'disclosure_file_id'",
+                ));
+            }
+            if value_at_path(payload, "metadata").is_some() {
+                ensure_object_field(payload, "metadata", false)?;
+            }
+        }
+        "oa" => {
+            ensure_nonempty_string_field(payload, "idempotency_key", true)?;
+            let oa_text_ok = value_at_path(payload, "oa_text")
+                .and_then(Value::as_str)
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            let oa_file_ok = value_at_path(payload, "oa_notice_file_id")
+                .and_then(Value::as_str)
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            if !oa_text_ok && !oa_file_ok {
+                return Err(String::from("OA input requires either 'oa_text' or 'oa_notice_file_id'"));
+            }
+            if value_at_path(payload, "application_file_id").is_some() {
+                ensure_nonempty_string_field(payload, "application_file_id", false)?;
+            }
+            if value_at_path(payload, "prior_art_file_ids").is_some() {
+                ensure_array_of_nonempty_strings_field(payload, "prior_art_file_ids", 0)?;
+            }
+            if value_at_path(payload, "original_claims").is_some() {
+                ensure_object_field(payload, "original_claims", false)?;
+            }
+            if value_at_path(payload, "metadata").is_some() {
+                ensure_object_field(payload, "metadata", false)?;
+            }
+        }
+        "compare" => {
+            if value_at_path(payload, "idempotency_key").is_some() {
+                ensure_nonempty_string_field(payload, "idempotency_key", false)?;
+            }
+            if value_at_path(payload, "comparison_goal").is_some() {
+                ensure_nonempty_string_field(payload, "comparison_goal", false)?;
+            }
+            let app_file_ok = value_at_path(payload, "application_file_id")
+                .and_then(Value::as_str)
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            let prior_file_count = value_at_path(payload, "prior_art_file_ids")
+                .and_then(Value::as_array)
+                .map(|arr| arr.iter().filter(|v| v.as_str().map(|s| !s.trim().is_empty()).unwrap_or(false)).count())
+                .unwrap_or(0);
+            let prior_path_count = value_at_path(payload, "prior_arts_paths")
+                .and_then(Value::as_array)
+                .map(|arr| arr.iter().filter(|v| v.as_str().map(|s| !s.trim().is_empty()).unwrap_or(false)).count())
+                .unwrap_or(0);
+            if !app_file_ok && prior_file_count == 0 && prior_path_count == 0 {
+                return Err(String::from(
+                    "Compare input should provide file IDs/paths, e.g. 'application_file_id' + 'prior_art_file_ids'",
+                ));
+            }
+        }
+        "polish" => {
+            if value_at_path(payload, "idempotency_key").is_some() {
+                ensure_nonempty_string_field(payload, "idempotency_key", false)?;
+            }
+            let app_file_ok = value_at_path(payload, "application_file_id")
+                .and_then(Value::as_str)
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            let claims_obj_ok = value_at_path(payload, "original_claims")
+                .map(Value::is_object)
+                .unwrap_or(false);
+            let spec_obj_ok = value_at_path(payload, "application_specification")
+                .map(Value::is_object)
+                .unwrap_or(false);
+            if !app_file_ok && !claims_obj_ok && !spec_obj_ok {
+                return Err(String::from(
+                    "Polish input requires at least one of 'application_file_id', 'original_claims', or 'application_specification'",
+                ));
+            }
+        }
+        _ => return Err(format!("Unsupported workflow: {workflow}")),
+    }
+    Ok(())
+}
+
 fn detect_content_type(path: &Path) -> &'static str {
     let ext = path
         .extension()
@@ -789,6 +933,8 @@ fn execute_cli_task(opts: &CliOptions) -> Result<Value, String> {
             json!({})
         };
         let input_json = build_cli_request_payload(opts, base_payload, base_url)?;
+        validate_cli_input_schema(workflow, &input_json)
+            .map_err(|e| format!("CLI input schema validation failed: {e}"))?;
         let response = match workflow {
             "draft" => {
                 let start_resp = post_json(base_url, "/api/v1/draft/start", &input_json, opts.timeout_sec, &llm)?;
