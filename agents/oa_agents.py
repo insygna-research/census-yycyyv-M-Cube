@@ -68,6 +68,27 @@ def _duration_ms(started_at: float) -> int:
     return int((time.perf_counter() - started_at) * 1000)
 
 
+def _build_minimal_response_traceability_report() -> dict[str, Any]:
+    fallback_finding = {
+        "severity": "WARNING",
+        "risk_category": "LOGIC_INCONSISTENCY",
+        "problematic_text": "无",
+        "audit_reasoning": "模型输出异常，已触发节点级结构兜底，请人工复核最终答复文本。",
+        "suggested_remedy": "建议人工核查权利要求支持依据、论证一致性及不利自认风险。",
+    }
+    return {
+        "global_go_no_go": "NO_GO",
+        "support_basis_audit": [fallback_finding],
+        "logic_consistency_audit": [fallback_finding],
+        "harmful_admission_audit": [],
+        "final_strategy_summary": "自动兜底：响应溯源报告输出不稳定，已按最小结构补全并置为NO_GO待人工复核。",
+        "claim_support_ok": False,
+        "logic_consistency_ok": False,
+        "findings": [fallback_finding],
+        "final_risk_summary": "自动兜底：请人工复核后再提交。",
+    }
+
+
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
@@ -891,8 +912,14 @@ def response_traceability_node(
         f"[ARGUMENT_DRAFT (The Legal Response to Audit)]\n{state.get('argument_draft')}\n\n"
         f"[STRATEGY_DECISION & STRESS TEST (For Context)]\n{state.get('strategy_decision')}\n{state.get('stress_test_report')}"
     )
-    report = agent.run_structured(prompt=prompt, output_model=ResponseTraceabilityReport)
-    payload = report.model_dump()
+    try:
+        report = agent.run_structured(prompt=prompt, output_model=ResponseTraceabilityReport)
+        payload = report.model_dump()
+        # Node-level second pass to avoid whole-chain failure on semi-structured outputs.
+        if not isinstance(payload.get("support_basis_audit"), list):
+            payload = _build_minimal_response_traceability_report()
+    except Exception:
+        payload = _build_minimal_response_traceability_report()
     if not payload.get("support_basis_audit") and payload.get("findings"):
         payload["support_basis_audit"] = payload.get("findings", [])
     if "logic_consistency_audit" not in payload:

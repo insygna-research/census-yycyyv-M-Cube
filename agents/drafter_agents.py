@@ -42,6 +42,59 @@ def _duration_ms(started_at: float) -> int:
     return int((time.perf_counter() - started_at) * 1000)
 
 
+def _build_minimal_traceability_report(state: DraftingState) -> dict[str, Any]:
+    claims_payload = state.get("claims") if isinstance(state.get("claims"), dict) else {}
+    claims = claims_payload.get("claims", []) if isinstance(claims_payload, dict) else []
+    reports: list[dict[str, Any]] = []
+    for claim in claims if isinstance(claims, list) else []:
+        if not isinstance(claim, dict):
+            continue
+        claim_no = int(claim.get("claim_number") or 0)
+        if claim_no <= 0:
+            continue
+        elements = claim.get("elements", [])
+        if not isinstance(elements, list) or len(elements) == 0:
+            fallback_text = str(claim.get("full_text", "")).strip() or "未提供可拆解的技术特征。"
+            elements = [fallback_text]
+        evidence = []
+        for raw_feature in elements:
+            feature_text = str(raw_feature).strip() or "未提供特征文本。"
+            evidence.append(
+                {
+                    "feature_text": feature_text,
+                    "verbatim_quote": "模型输出异常，未能稳定提取原文支持证据，请人工复核。",
+                    "support_level": "Unsupported",
+                    "reasoning": "自动兜底：为避免流程中断，先标记为需人工核查。",
+                }
+            )
+        reports.append(
+            {
+                "claim_number": claim_no,
+                "elements_evidence": evidence,
+                "is_fully_supported": False,
+            }
+        )
+    if not reports:
+        reports = [
+            {
+                "claim_number": 1,
+                "elements_evidence": [
+                    {
+                        "feature_text": "未解析到权利要求特征。",
+                        "verbatim_quote": "模型输出异常，未能稳定提取原文支持证据，请人工复核。",
+                        "support_level": "Unsupported",
+                        "reasoning": "自动兜底：为避免流程中断，先标记为需人工核查。",
+                    }
+                ],
+                "is_fully_supported": False,
+            }
+        ]
+    return {
+        "reports": reports,
+        "overall_risk_assessment": "自动兜底报告：本次溯源输出不稳定，已按最小结构补全并全部标记为需人工复核。",
+    }
+
+
 def extract_tech_node(
     state: DraftingState,
     agent: BaseStructuredAgent[TechSummary],
@@ -171,9 +224,16 @@ def traceability_check_node(
         f"[DISCLOSURE_TEXT]\n{state['disclosure_text']}\n\n"
         f"[DRAFTED_CLAIMS]\n{state['claims']}"
     )
-    result = agent.run_structured(prompt=prompt, output_model=ClaimTraceabilityReport)
+    try:
+        result = agent.run_structured(prompt=prompt, output_model=ClaimTraceabilityReport)
+        payload = result.model_dump()
+        # Node-level second pass: ensure minimum required shape even if upstream output drifts.
+        if not payload.get("reports"):
+            payload = _build_minimal_traceability_report(state)
+    except Exception:
+        payload = _build_minimal_traceability_report(state)
     return {
-        "claim_traceability": result.model_dump(),
+        "claim_traceability": payload,
         "current_step": "traceability_check_node",
         "status": "running",
         "node_latency_ms": _duration_ms(started_at),
