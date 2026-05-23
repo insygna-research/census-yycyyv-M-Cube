@@ -143,6 +143,29 @@ Note: If you encounter a missing PyInstaller error during local building, you ca
 pip install pyinstaller
 ```
 
+### 5. CLI Mode (Subprocess Integration)
+
+The built desktop executable supports command-line mode for silent subprocess invocation.
+
+Usage:
+
+```bash
+M-Cube.exe --cli --workflow <draft|oa|compare|polish> --input <json|@file> [--timeout-sec 120] [--pretty]
+```
+
+Examples:
+
+```bash
+M-Cube.exe --cli --workflow draft --input @draft_request.json --pretty
+M-Cube.exe --cli --workflow oa --input "{\"idempotency_key\":\"oa-1\",\"oa_text\":\"...\",\"original_claims\":{\"text\":\"...\"},\"prior_arts_paths\":[]}"
+```
+
+Output contract:
+
+- `stdout`: single JSON object
+- exit code `0`: success
+- non-zero exit code: failure (`2` args error, `3` execution error)
+
 ## 📄 License
 
 M-Cube is licensed under the [MIT License](LICENSE).
