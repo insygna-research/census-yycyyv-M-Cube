@@ -163,14 +163,18 @@ The built desktop executable supports command-line mode for silent subprocess in
 Usage:
 
 ```bash
-M-Cube.exe --cli --workflow <draft|oa|compare|polish> --input <json|@file> [--timeout-sec 120] [--pretty]
+M-Cube.exe --cli --workflow draft --input @draft_request.json \
+  --provider <PROVIDER_NAME> \
+  --model <TEXT_MODEL> \
+  --vision-model <VISION_MODEL> \
+  --api-key <YOUR_API_KEY> \
+  --output draft_result.json
 ```
 
 Examples:
 
 ```bash
-M-Cube.exe --cli --workflow draft --input @draft_request.json --pretty
-M-Cube.exe --cli --workflow oa --input "{\"idempotency_key\":\"oa-1\",\"oa_text\":\"...\",\"original_claims\":{\"text\":\"...\"},\"prior_arts_paths\":[]}"
+M-Cube.exe --cli --workflow draft --input @draft_request.json --provider qwen --model qwen-plus --vision-model qwen-vl-plus --api-key <API_KEY> --temperature 0.1 --timeout-sec 600 --pretty --output draft_result.json
 ```
 
 Output contract:
@@ -178,6 +182,9 @@ Output contract:
 - `stdout`: single JSON object
 - exit code `0`: success
 - non-zero exit code: failure (`2` args error, `3` execution error)
+- CLI also writes a JSON result file:
+  - default: `mcube-cli-last-result.json` in current working directory
+  - or use `--output <path>` to specify a custom output file
 
 ## 📄 License
 

@@ -26,8 +26,24 @@ struct CliOptions {
     input: Option<String>,
     timeout_sec: u64,
     pretty: bool,
+    output: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    vision_model: Option<String>,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    temperature: Option<String>,
     show_help: bool,
     show_version: bool,
+}
+
+struct LlmHeaders {
+    provider: Option<String>,
+    model: Option<String>,
+    vision_model: Option<String>,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    temperature: Option<String>,
 }
 
 fn append_log(log_file: &Path, msg: &str) {
@@ -270,6 +286,13 @@ fn parse_cli_args(args: &[String]) -> Result<CliOptions, String> {
     let mut input: Option<String> = None;
     let mut timeout_sec: u64 = 120;
     let mut pretty = false;
+    let mut output: Option<String> = None;
+    let mut provider: Option<String> = None;
+    let mut model: Option<String> = None;
+    let mut vision_model: Option<String> = None;
+    let mut base_url: Option<String> = None;
+    let mut api_key: Option<String> = None;
+    let mut temperature: Option<String> = None;
     let mut show_help = false;
     let mut show_version = false;
 
@@ -295,6 +318,41 @@ fn parse_cli_args(args: &[String]) -> Result<CliOptions, String> {
                 let value = args.get(i).ok_or_else(|| String::from("Missing value for --timeout-sec"))?;
                 timeout_sec = value.parse::<u64>().map_err(|_| String::from("Invalid integer for --timeout-sec"))?;
             }
+            "--output" => {
+                i += 1;
+                let value = args.get(i).ok_or_else(|| String::from("Missing value for --output"))?;
+                output = Some(value.to_string());
+            }
+            "--provider" => {
+                i += 1;
+                let value = args.get(i).ok_or_else(|| String::from("Missing value for --provider"))?;
+                provider = Some(value.to_string());
+            }
+            "--model" => {
+                i += 1;
+                let value = args.get(i).ok_or_else(|| String::from("Missing value for --model"))?;
+                model = Some(value.to_string());
+            }
+            "--vision-model" => {
+                i += 1;
+                let value = args.get(i).ok_or_else(|| String::from("Missing value for --vision-model"))?;
+                vision_model = Some(value.to_string());
+            }
+            "--base-url" => {
+                i += 1;
+                let value = args.get(i).ok_or_else(|| String::from("Missing value for --base-url"))?;
+                base_url = Some(value.to_string());
+            }
+            "--api-key" => {
+                i += 1;
+                let value = args.get(i).ok_or_else(|| String::from("Missing value for --api-key"))?;
+                api_key = Some(value.to_string());
+            }
+            "--temperature" => {
+                i += 1;
+                let value = args.get(i).ok_or_else(|| String::from("Missing value for --temperature"))?;
+                temperature = Some(value.to_string());
+            }
             "--cli" => {}
             _ => {
                 return Err(format!("Unknown argument: {arg}"));
@@ -308,13 +366,49 @@ fn parse_cli_args(args: &[String]) -> Result<CliOptions, String> {
         input,
         timeout_sec,
         pretty,
+        output,
+        provider,
+        model,
+        vision_model,
+        base_url,
+        api_key,
+        temperature,
         show_help,
         show_version,
     })
 }
 
 fn cli_help_text() -> &'static str {
-    "M-Cube CLI\n\nUsage:\n  M-Cube.exe --cli --workflow <draft|oa|compare|polish> --input <json|@file> [--timeout-sec N] [--pretty]\n  M-Cube.exe --cli --help\n  M-Cube.exe --cli --version\n"
+    "M-Cube CLI\n\nUsage:\n  M-Cube.exe --cli --workflow <draft|oa|compare|polish> --input <json|@file> [--timeout-sec N] [--pretty] [--output <path>] --provider <name> --model <name> --api-key <key> [--vision-model <name>] [--base-url <url>] [--temperature <num>]\n  M-Cube.exe --cli --help\n  M-Cube.exe --cli --version\n"
+}
+
+fn normalize_provider_name(value: &str) -> String {
+    let raw = value.trim().to_lowercase();
+    if raw == "anthropic" {
+        return String::from("claude");
+    }
+    raw
+}
+
+fn build_effective_llm_headers(opts: &CliOptions) -> LlmHeaders {
+    let provider = opts
+        .provider
+        .as_deref()
+        .map(normalize_provider_name);
+    let model = opts.model.clone();
+    let vision_model = opts.vision_model.clone();
+    let base_url = opts.base_url.clone();
+    let temperature = opts.temperature.clone();
+    let api_key = opts.api_key.clone();
+
+    LlmHeaders {
+        provider,
+        model,
+        vision_model,
+        base_url,
+        api_key,
+        temperature,
+    }
 }
 
 fn read_input_json(input_arg: &str) -> Result<Value, String> {
@@ -340,14 +434,32 @@ fn wait_for_api_ready(base_url: &str, timeout_sec: u64) -> Result<(), String> {
     }
 }
 
-fn post_json(base_url: &str, path: &str, body: &Value, timeout_sec: u64) -> Result<Value, String> {
+fn post_json(base_url: &str, path: &str, body: &Value, timeout_sec: u64, llm: &LlmHeaders) -> Result<Value, String> {
     let url = format!("{base_url}{path}");
     let timeout = Duration::from_secs(timeout_sec.max(1));
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(timeout)
         .timeout_read(timeout)
         .build();
-    let req = agent.post(&url).set("Content-Type", "application/json");
+    let mut req = agent.post(&url).set("Content-Type", "application/json");
+    if let Some(v) = llm.provider.as_deref() {
+        req = req.set("X-LLM-Provider", v);
+    }
+    if let Some(v) = llm.model.as_deref() {
+        req = req.set("X-LLM-Model", v);
+    }
+    if let Some(v) = llm.vision_model.as_deref() {
+        req = req.set("X-LLM-Vision-Model", v);
+    }
+    if let Some(v) = llm.base_url.as_deref() {
+        req = req.set("X-LLM-Base-URL", v);
+    }
+    if let Some(v) = llm.api_key.as_deref() {
+        req = req.set("X-LLM-API-Key", v);
+    }
+    if let Some(v) = llm.temperature.as_deref() {
+        req = req.set("X-LLM-Temperature", v);
+    }
 
     match req.send_string(&body.to_string()) {
         Ok(resp) => {
@@ -364,7 +476,7 @@ fn post_json(base_url: &str, path: &str, body: &Value, timeout_sec: u64) -> Resu
     }
 }
 
-fn maybe_continue_draft(base_url: &str, start_resp: &Value, timeout_sec: u64) -> Result<Value, String> {
+fn maybe_continue_draft(base_url: &str, start_resp: &Value, timeout_sec: u64, llm: &LlmHeaders) -> Result<Value, String> {
     let status = start_resp
         .get("status")
         .and_then(Value::as_str)
@@ -386,7 +498,17 @@ fn maybe_continue_draft(base_url: &str, start_resp: &Value, timeout_sec: u64) ->
         "session_id": session_id,
         "approved_claims": claims
     });
-    post_json(base_url, "/api/v1/draft/continue", &continue_payload, timeout_sec)
+    post_json(base_url, "/api/v1/draft/continue", &continue_payload, timeout_sec, llm)
+}
+
+fn tail_log(path: &Path, max_lines: usize) -> String {
+    let content = match fs::read_to_string(path) {
+        Ok(v) => v,
+        Err(_) => return String::new(),
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n")
 }
 
 fn execute_cli_task(opts: &CliOptions) -> Result<Value, String> {
@@ -424,21 +546,37 @@ fn execute_cli_task(opts: &CliOptions) -> Result<Value, String> {
     let mut runtime = spawn_sidecar(&runtime_root, &log_file)?;
     append_log(&log_file, "Backend sidecar spawned (CLI mode).");
 
+    let llm = build_effective_llm_headers(opts);
     let result = (|| {
         let base_url = "http://127.0.0.1:8000";
+        // Force local loopback calls to bypass any system proxy settings.
+        std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+        std::env::set_var("no_proxy", "127.0.0.1,localhost");
         wait_for_api_ready(base_url, opts.timeout_sec)?;
         let response = match workflow {
             "draft" => {
-                let start_resp = post_json(base_url, "/api/v1/draft/start", &input_json, opts.timeout_sec)?;
-                maybe_continue_draft(base_url, &start_resp, opts.timeout_sec)?
+                let start_resp = post_json(base_url, "/api/v1/draft/start", &input_json, opts.timeout_sec, &llm)?;
+                maybe_continue_draft(base_url, &start_resp, opts.timeout_sec, &llm)?
             }
-            "oa" => post_json(base_url, "/api/v1/oa/start", &input_json, opts.timeout_sec)?,
-            "compare" => post_json(base_url, "/api/v1/compare/start", &input_json, opts.timeout_sec)?,
-            "polish" => post_json(base_url, "/api/v1/polish/start", &input_json, opts.timeout_sec)?,
+            "oa" => post_json(base_url, "/api/v1/oa/start", &input_json, opts.timeout_sec, &llm)?,
+            "compare" => post_json(base_url, "/api/v1/compare/start", &input_json, opts.timeout_sec, &llm)?,
+            "polish" => post_json(base_url, "/api/v1/polish/start", &input_json, opts.timeout_sec, &llm)?,
             _ => return Err(format!("Unsupported workflow: {workflow}")),
         };
         Ok(response)
     })();
+
+    if result.is_err() {
+        let log_tail = tail_log(&runtime.log_file, 80);
+        let detail = format!(
+            "{}\nlog_file={}\nlog_tail=\n{}",
+            result.clone().err().unwrap_or_default(),
+            runtime.log_file.display(),
+            log_tail
+        );
+        shutdown_sidecar(&mut runtime.child, &runtime.log_file);
+        return Err(detail);
+    }
 
     shutdown_sidecar(&mut runtime.child, &runtime.log_file);
     result
@@ -453,6 +591,21 @@ fn print_json_stdout(value: &Value, pretty: bool) {
     } else {
         println!("{value}");
     }
+}
+
+fn write_cli_output_file(value: &Value, pretty: bool, output_path: Option<&str>) -> Result<PathBuf, String> {
+    let target = if let Some(path) = output_path {
+        PathBuf::from(path)
+    } else {
+        PathBuf::from("mcube-cli-last-result.json")
+    };
+    let text = if pretty {
+        serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+    } else {
+        value.to_string()
+    };
+    fs::write(&target, text).map_err(|e| format!("Failed to write CLI output file: {e}"))?;
+    Ok(target)
 }
 
 fn run_cli_mode() -> i32 {
@@ -474,24 +627,22 @@ fn run_cli_mode() -> i32 {
 
     match execute_cli_task(&opts) {
         Ok(payload) => {
-            print_json_stdout(
-                &json!({
-                    "ok": true,
-                    "workflow": opts.workflow,
-                    "result": payload
-                }),
-                opts.pretty,
-            );
+            let out_json = json!({
+                "ok": true,
+                "workflow": opts.workflow,
+                "result": payload
+            });
+            let _ = write_cli_output_file(&out_json, opts.pretty, opts.output.as_deref());
+            print_json_stdout(&out_json, opts.pretty);
             0
         }
         Err(err) => {
-            print_json_stdout(
-                &json!({
-                    "ok": false,
-                    "error": { "code": "CLI_EXECUTION_FAILED", "message": err }
-                }),
-                opts.pretty,
-            );
+            let out_json = json!({
+                "ok": false,
+                "error": { "code": "CLI_EXECUTION_FAILED", "message": err }
+            });
+            let _ = write_cli_output_file(&out_json, opts.pretty, opts.output.as_deref());
+            print_json_stdout(&out_json, opts.pretty);
             3
         }
     }
