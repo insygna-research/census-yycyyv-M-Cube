@@ -452,109 +452,6 @@ fn read_input_json(input_arg: &str) -> Result<Value, String> {
     }
 }
 
-fn expect_object_field(root: &Value, key: &str, errors: &mut Vec<String>) {
-    if let Some(v) = root.get(key) {
-        if !v.is_object() {
-            errors.push(format!("`{key}` must be an object"));
-        }
-    }
-}
-
-fn expect_string_or_null_field(root: &Value, key: &str, errors: &mut Vec<String>) {
-    if let Some(v) = root.get(key) {
-        if !(v.is_string() || v.is_null()) {
-            errors.push(format!("`{key}` must be a string or null"));
-        }
-    }
-}
-
-fn expect_string_array_field(root: &Value, key: &str, errors: &mut Vec<String>) {
-    if let Some(v) = root.get(key) {
-        match v.as_array() {
-            Some(arr) => {
-                for (idx, item) in arr.iter().enumerate() {
-                    if !item.is_string() {
-                        errors.push(format!("`{key}[{idx}]` must be a string"));
-                    }
-                }
-            }
-            None => errors.push(format!("`{key}` must be an array of strings")),
-        }
-    }
-}
-
-fn validate_cli_input_schema(workflow: &str, payload: &Value) -> Result<(), String> {
-    let obj = payload
-        .as_object()
-        .ok_or_else(|| String::from("`--input` JSON root must be an object"))?;
-    let root = Value::Object(obj.clone());
-    let mut errors: Vec<String> = Vec::new();
-
-    if let Some(v) = root.get("idempotency_key") {
-        if !v.is_string() {
-            errors.push(String::from("`idempotency_key` must be a string"));
-        }
-    }
-    expect_object_field(&root, "metadata", &mut errors);
-
-    match workflow {
-        "draft" => {
-            expect_string_or_null_field(&root, "disclosure_text", &mut errors);
-            if let Some(v) = root.get("disclosure_file_id") {
-                if !(v.is_string() || v.is_null()) {
-                    errors.push(String::from("`disclosure_file_id` must be a string or null"));
-                }
-            }
-        }
-        "oa" => {
-            expect_string_or_null_field(&root, "oa_text", &mut errors);
-            expect_object_field(&root, "original_claims", &mut errors);
-            expect_object_field(&root, "application_specification", &mut errors);
-            expect_string_array_field(&root, "prior_arts_paths", &mut errors);
-            expect_string_array_field(&root, "prior_art_file_ids", &mut errors);
-            for key in ["oa_notice_file_id", "application_file_id"] {
-                if let Some(v) = root.get(key) {
-                    if !(v.is_string() || v.is_null()) {
-                        errors.push(format!("`{key}` must be a string or null"));
-                    }
-                }
-            }
-        }
-        "compare" => {
-            expect_object_field(&root, "original_claims", &mut errors);
-            expect_object_field(&root, "application_specification", &mut errors);
-            expect_string_array_field(&root, "prior_arts_paths", &mut errors);
-            expect_string_array_field(&root, "prior_art_file_ids", &mut errors);
-            for key in ["application_file_id", "comparison_goal"] {
-                if let Some(v) = root.get(key) {
-                    if !(v.is_string() || v.is_null()) {
-                        errors.push(format!("`{key}` must be a string or null"));
-                    }
-                }
-            }
-        }
-        "polish" => {
-            expect_object_field(&root, "original_claims", &mut errors);
-            expect_object_field(&root, "application_specification", &mut errors);
-            if let Some(v) = root.get("application_file_id") {
-                if !(v.is_string() || v.is_null()) {
-                    errors.push(String::from("`application_file_id` must be a string or null"));
-                }
-            }
-        }
-        _ => errors.push(format!("Unsupported workflow: {workflow}")),
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "CLI input schema validation failed for workflow `{workflow}`: {}",
-            errors.join("; ")
-        ))
-    }
-}
-
 fn detect_content_type(path: &Path) -> &'static str {
     let ext = path
         .extension()
@@ -891,7 +788,6 @@ fn execute_cli_task(opts: &CliOptions) -> Result<Value, String> {
         } else {
             json!({})
         };
-        validate_cli_input_schema(workflow, &base_payload)?;
         let input_json = build_cli_request_payload(opts, base_payload, base_url)?;
         let response = match workflow {
             "draft" => {
